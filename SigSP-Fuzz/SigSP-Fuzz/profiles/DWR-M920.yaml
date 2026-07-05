@@ -1,0 +1,344 @@
+# =============================================================================
+# D-Link DWR-M920 v1.1.7 B2 — Firmware Profile
+# =============================================================================
+#
+# D-Link DWR-M920 is a 4G LTE router based on Realtek RTL819x SoC.
+# This firmware (2025-12-04 build) contains a Boa web server, multiple network
+# daemons, PPP/L2TP/PPTP VPN stacks, TR-069 remote management, and 4 CGI
+# binaries — all compiled for MIPS 32-bit little-endian with uClibc.
+#
+# Auto-generated profile: 2026-06-08
+#
+# Usage:
+#   python -m fuzzingbrain.main --firmware firmware/DWR-M920_V1.1.7_B2_20251204155506.bin --profile profiles/DWR-M920.yaml
+# =============================================================================
+
+name: DWR-M920
+version: "1.1.7_B2"
+vendor: D-Link
+device_type: router
+
+# ---- Hardware Architecture ------------------------------------------------
+# MIPS 32-bit little-endian, uClibc, Linux 3.10.90 (Realtek RTL819x SDK)
+architecture:
+  cpu: mips
+  endian: little
+  bits: 32
+
+# ---- Filesystem -----------------------------------------------------------
+filesystem: squashfs
+
+# ---- Known Entry Points ---------------------------------------------------
+# Key network-exposed services and privileged binaries found in the extracted
+# squashfs filesystem. These are the primary attack surface for Phase 2.
+
+known_entry_points:
+
+  # ---- Web Server (HIGHEST PRIORITY) ----
+  - name: Boa Web Server
+    binary: bin/boa
+    protocol: HTTP
+    port: 80
+    description: >
+      Boa embedded web server (~76KB). Serves D-Link web admin interface,
+      processes CGI requests from 4 compiled CGI binaries (getInfoLTE.cgi,
+      getInfoWAN.cgi, goAppProcess.cgi, quicksetup.cgi). CGI binaries use
+      system()/popen() patterns common in embedded web servers. High-value
+      attack surface: authentication bypass (CWE-287), command injection
+      (CWE-78), buffer overflow (CWE-121).
+
+  - name: Web CGI - getInfoWAN
+    binary: web/getInfoWAN.cgi
+    protocol: HTTP
+    port: 80
+    description: >
+      CGI binary serving WAN status information. Reads network config from
+      system and renders HTML. Likely uses popen()/system() to call ifconfig
+      or iptables — command injection risk.
+
+  - name: Web CGI - getInfoLTE
+    binary: web/getInfoLTE.cgi
+    protocol: HTTP
+    port: 80
+    description: >
+      CGI binary serving 4G LTE modem status. Interfaces with AT command
+      subsystem. Potential AT command injection (CWE-77) if user input
+      reaches modem.
+
+  - name: Web CGI - goAppProcess
+    binary: web/goAppProcess.cgi
+    protocol: HTTP
+    port: 80
+    description: >
+      CGI binary handling application-layer form submissions (settings
+      changes, firmware uploads, etc.). Most complex CGI — processes POST
+      data from admin forms. High risk for buffer overflow and command
+      injection.
+
+  - name: Web CGI - quicksetup
+    binary: web/quicksetup.cgi
+    protocol: HTTP
+    port: 80
+    description: >
+      CGI binary for initial router setup wizard. Handles WAN config,
+      wireless settings, admin password changes. Password handling may
+      have command injection or weak crypto.
+
+  # ---- Remote Access Services ----
+  - name: Telnet Daemon
+    binary: bin/telnetd
+    protocol: TELNET
+    port: 23
+    description: >
+      Telnet server (typically BusyBox telnetd). D-Link routers often
+      expose telnet with hardcoded credentials or backdoor accounts.
+      If accessible, provides full shell access.
+
+  - name: CWMP TR-069 Client
+    binary: bin/cwmpClient
+    protocol: HTTP/SOAP
+    port: 7547
+    description: >
+      CWMP (TR-069) remote management client. Communicates with ISP ACS
+      server via SOAP/HTTP. Processes XML config from remote server —
+      potential XXE (CWE-611), command injection in config parsing.
+
+  # ---- Network Infrastructure ----
+  - name: DNS/DHCP Forwarder
+    binary: bin/dnsmasq
+    protocol: DNS
+    port: 53
+    description: >
+      DNS/DHCP forwarder. Processes DNS queries and DHCP requests from
+      LAN clients. Known history of DNS poisoning and buffer overflow
+      vulnerabilities (CVE-2017-14491 series).
+
+  - name: Mini IGD (UPnP)
+    binary: bin/miniigd
+    protocol: UPNP
+    port: 1900
+    description: >
+      Mini Internet Gateway Device — UPnP IGD implementation. Handles
+      port forwarding requests from LAN clients. UPnP stacks frequently
+      have buffer overflows in M-SEARCH/SSDP parsing.
+
+  - name: DHCPv6 Server
+    binary: bin/dhcp6s
+    protocol: DHCPv6
+    port: 547
+    description: >
+      DHCPv6 server. Processes DHCPv6 solicit/request messages.
+      Potential for packet parsing vulnerabilities.
+
+  - name: DHCPv6 Client
+    binary: bin/dhcp6c
+    protocol: DHCPv6
+    port: 546
+    description: >
+      DHCPv6 client — receives and processes DHCPv6 advertisements from
+      upstream ISP. Processes server-controlled data (DNS, NTP, domain).
+
+  # ---- VPN / Tunneling ----
+  - name: PPP Daemon
+    binary: bin/pppd
+    protocol: PPP
+    port: 0
+    description: >
+      Point-to-Point Protocol daemon. Used for 4G LTE modem dial-up and
+      PPPoE WAN connections. Complex protocol parser with LCP/IPCP/PAP/CHAP
+      — history of buffer overflows in option parsing.
+
+  - name: PPTP Client
+    binary: bin/pptp
+    protocol: PPTP
+    port: 1723
+    description: >
+      PPTP VPN client. Sets up PPTP tunnels with GRE encapsulation.
+
+  - name: L2TP Daemon
+    binary: bin/l2tpd
+    protocol: L2TP
+    port: 1701
+    description: >
+      Layer 2 Tunneling Protocol daemon. Complex control/data plane
+      protocol with AVP parsing — potential for malformed AVP crashes.
+
+  # ---- Routing / IPv6 ----
+  - name: Router Advertisement Daemon
+    binary: bin/radvd
+    protocol: ICMPv6
+    port: 0
+    description: >
+      IPv6 Router Advertisement daemon. Sends RA messages to LAN.
+      Processes RDNSS/DNSSL options from config.
+
+  - name: NPD6 Daemon
+    binary: bin/npd6
+    protocol: ICMPv6
+    port: 0
+    description: >
+      IPv6 Neighbor Proxy Daemon. Proxies ND messages between WAN and LAN.
+
+  # ---- Other Services ----
+  - name: WSC Daemon (WPS)
+    binary: bin/wscd
+    protocol: EAP/WPS
+    port: 0
+    description: >
+      Wi-Fi Simple Config (WPS) daemon. Handles WPS PIN/PBC enrollment.
+      WPS PIN brute-force and EAP message parsing vulnerabilities.
+
+  - name: Dynamic DNS Client
+    binary: bin/ddns_inet
+    protocol: HTTP
+    port: 0
+    description: >
+      Dynamic DNS update client. Periodically contacts DDNS provider APIs.
+      Processes DNS names from web admin input — command injection risk.
+
+  - name: NTP Client
+    binary: bin/ntp_inet
+    protocol: NTP
+    port: 123
+    description: >
+      NTP time synchronization client. Processes NTP server responses.
+
+  - name: SMS Communication
+    binary: bin/sms_comm
+    protocol: AT-SMS
+    port: 0
+    description: >
+      SMS sending/receiving via 4G modem AT commands. Processes user-
+      supplied phone numbers and SMS content — AT command injection
+      (CWE-77) likely.
+
+  - name: Firmware Upgrade
+    binary: bin/fwupg
+    protocol: HTTP/FTP
+    port: 0
+    description: >
+      Firmware upgrade client. Downloads and flashes firmware images.
+      Image verification bypass could lead to persistent compromise.
+
+  - name: Forwarding Daemon
+    binary: bin/fwd
+    protocol: TCP/UDP
+    port: 0
+    description: >
+      Packet forwarding daemon (statically linked). May implement NAT
+      or custom forwarding rules.
+
+  - name: Kernel Link Daemon
+    binary: bin/klinkd
+    protocol: netlink
+    port: 0
+    description: >
+      Kernel link monitoring daemon. Communicates with kernel via netlink
+      sockets. Processes network interface events.
+
+  - name: Factory Test
+    binary: bin/factorytest
+    protocol: various
+    port: 0
+    description: >
+      Factory test binary. Often contains debug backdoors, hardcoded
+      credentials, or unrestricted command execution. High value target.
+
+  - name: Config Reload
+    binary: bin/reload
+    protocol: signal
+    port: 0
+    description: >
+      Configuration reload daemon (statically linked). Restarts services
+      on config changes. May have race conditions or privilege issues.
+
+  - name: IGMP Proxy
+    binary: bin/igmpproxy
+    protocol: IGMP
+    port: 0
+    description: >
+      IGMP multicast proxy. Forwards multicast group memberships.
+
+  - name: MLD Proxy
+    binary: bin/mldproxy
+    protocol: MLD
+    port: 0
+    description: >
+      Multicast Listener Discovery proxy (IPv6 equivalent of IGMP proxy).
+
+  - name: FBF Downloader
+    binary: bin/fbfdownloader
+    protocol: HTTP/FTP
+    port: 0
+    description: >
+      FBF (Fast Boot/Firmware?) downloader. Statically linked binary
+      for downloading firmware updates over HTTP.
+
+  - name: CPE FOTA Upgrade
+    binary: bin/cpeFotaUpgrade
+    protocol: HTTP
+    port: 0
+    description: >
+      CPE Firmware-Over-The-Air upgrade client. Downloads and applies
+      firmware updates from carrier/ISP server.
+
+  - name: LLTD Daemon
+    binary: bin/lld2d
+    protocol: LLTD
+    port: 0
+    description: >
+      Link Layer Topology Discovery daemon (Microsoft LLTD). Responds
+      to network discovery probes on Windows networks.
+
+# ---- Focus Binaries (Phase 3 analysis priority) ---------------------------
+# Priority order: network-exposed services > CGI binaries > privileged utils
+focus_binaries:
+  # Tier 1: Direct network exposure
+  - bin/boa
+  - web/getInfoWAN.cgi
+  - web/getInfoLTE.cgi
+  - web/goAppProcess.cgi
+  - web/quicksetup.cgi
+  - bin/telnetd
+  - bin/cwmpClient
+  - bin/miniigd
+  - bin/dnsmasq
+  # Tier 2: Protocol parsers with complex input
+  - bin/dhcp6s
+  - bin/dhcp6c
+  - bin/pppd
+  - bin/pptp
+  - bin/l2tpd
+  - bin/radvd
+  - bin/npd6
+  - bin/wscd
+  - bin/igmpproxy
+  - bin/mldproxy
+  # Tier 3: Internal services with system access
+  - bin/ddns_inet
+  - bin/ntp_inet
+  - bin/sms_comm
+  - bin/fwupg
+  - bin/fwd
+  - bin/klinkd
+  - bin/reload
+  - bin/factorytest
+  - bin/fbfdownloader
+  - bin/cpeFotaUpgrade
+  - bin/lld2d
+
+# ---- Metadata -------------------------------------------------------------
+metadata:
+  build_date: "2025-12-04"
+  kernel: "Linux 3.10.90"
+  sdk: "Realtek RTL819x (NL930_DLINK_ZhongDong)"
+  libc: uClibc
+  total_elf_binaries: 108
+  static_binaries: 18
+  dynamic_binaries: 88
+  web_cgi_count: 4
+  notes: >
+    D-Link DWR-M920 4G LTE router. MIPS32 LE uClibc based on Realtek RTL819x.
+    Boa web server with 4 CGI binaries. CWMP TR-069, multiple VPN stacks.
+    Squashfs root with tmp/var symlinks to /var (read-write overlay).
+    Firmware extracted: LZMA kernel image + xz-compressed squashfs.

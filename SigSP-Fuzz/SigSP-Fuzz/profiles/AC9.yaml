@@ -1,0 +1,195 @@
+# =============================================================================
+# Tenda AC9 v15.03.05.19 — Firmware Profile
+# =============================================================================
+#
+# Tenda AC9 is a popular dual-band WiFi router. This version has 13 known
+# CVEs in httpd and goform handlers, primarily command injection and stack
+# buffer overflow via unsanitized user input to system()/strcpy()/sprintf().
+#
+# Key attack surface: httpd binary serving web management interface.
+# goform handlers are CGI endpoints invoked via HTTP POST to /goform/<handler>.
+#
+# Usage:
+#   ./FuzzingBrain.sh --firmware firmware/ac9_kf_V15.03.05.19(6318_)_cn.bin --profile profiles/AC9.yaml
+# =============================================================================
+
+name: Tenda AC9
+version: "15.03.05.19"
+vendor: Tenda
+device_type: router
+
+# ---- Hardware Architecture ------------------------------------------------
+architecture:
+  cpu: arm
+  endian: little
+  bits: 32
+
+# ---- Filesystem -----------------------------------------------------------
+filesystem: squashfs
+
+# ---- Known Entry Points ---------------------------------------------------
+known_entry_points:
+  - name: HTTP Management Server (httpd)
+    binary: bin/httpd
+    protocol: HTTP
+    port: 80
+    description: >
+      Main web management daemon. Handles goform CGI endpoints and serves
+      admin interface. Imports system(), popen(), strcpy(), sprintf().
+      Historical source of the majority of Tenda AC9 CVEs.
+
+  - name: Telnet Daemon
+    binary: usr/sbin/telnetd
+    protocol: TELNET
+    port: 23
+    description: >
+      Telnet server for remote shell access.
+
+# ---- Focus Binaries (Phase 1 prioritization) -------------------------------
+focus_binaries:
+  - bin/httpd
+  - bin/busybox
+
+# ---- Known CVEs (Ground Truth) --------------------------------------------
+known_cves:
+  # -- CVE-2018-14558: Command injection in setUsbUnload ---
+  - cve_id: CVE-2018-14558
+    cwe: CWE-78
+    function_name: formSetUsbUnload
+    binary_path: bin/httpd
+    description: >
+      Command injection via deviceName parameter in /goform/setUsbUnload.
+      User-supplied deviceName is passed to doSystemCmd() without sanitization.
+    cvss_score: 9.8
+
+  # -- CVE-2020-10987: Command injection in setUsbUnload ---
+  - cve_id: CVE-2020-10987
+    cwe: CWE-78
+    function_name: formSetUsbUnload
+    binary_path: bin/httpd
+    description: >
+      Command injection via deviceName parameter in /goform/setUsbUnload.
+      The deviceName value is passed directly to system().
+    cvss_score: 9.8
+
+  # -- CVE-2020-13389: Buffer overflow in openSchedWifi ---
+  - cve_id: CVE-2020-13389
+    cwe: CWE-121
+    function_name: formOpenSchedWifi
+    binary_path: bin/httpd
+    description: >
+      Stack buffer overflow via schedStartTime/schedEndTime parameters
+      in /goform/openSchedWifi. Oversized input overflows fixed-size
+      stack buffer.
+    cvss_score: 9.8
+
+  # -- CVE-2020-13390: Buffer overflow in addressNat ---
+  - cve_id: CVE-2020-13390
+    cwe: CWE-121
+    function_name: formAddressNat
+    binary_path: bin/httpd
+    description: >
+      Stack buffer overflow via entrys/mitInterface parameters in
+      /goform/addressNat. No bounds checking before strcpy.
+    cvss_score: 9.8
+
+  # -- CVE-2018-14557: Stack overflow in httpd page param ---
+  - cve_id: CVE-2018-14557
+    cwe: CWE-121
+    function_name: formGetWebPageName
+    binary_path: bin/httpd
+    description: >
+      Stack buffer overflow via page parameter. sprintf with user-controlled
+      format string overflows fixed-size stack buffer.
+    cvss_score: 9.8
+
+  # -- CVE-2018-14559: Stack overflow in httpd list param ---
+  - cve_id: CVE-2018-14559
+    cwe: CWE-121
+    function_name: formGetWebPageName
+    binary_path: bin/httpd
+    description: >
+      Stack buffer overflow via list parameter. sprintf writes
+      user-controlled data to a fixed-size stack buffer.
+    cvss_score: 9.8
+
+  # -- CVE-2018-16333: Buffer overflow in ssid param ---
+  - cve_id: CVE-2018-16333
+    cwe: CWE-121
+    function_name: formSetWifi
+    binary_path: bin/httpd
+    description: >
+      Buffer overflow via ssid parameter in WiFi settings handler.
+      strcpy of user-supplied SSID into fixed buffer without bounds check.
+    cvss_score: 8.8
+
+  # -- CVE-2018-16334: Command injection in mac param ---
+  - cve_id: CVE-2018-16334
+    cwe: CWE-78
+    function_name: formSetWifi
+    binary_path: bin/httpd
+    description: >
+      Command injection via mac parameter. User-supplied MAC address
+      passed to doSystemCmd() without sanitization.
+    cvss_score: 9.8
+
+  # -- CVE-2018-18727: Buffer overflow in deviceList param ---
+  - cve_id: CVE-2018-18727
+    cwe: CWE-121
+    function_name: formSetDeviceList
+    binary_path: bin/httpd
+    description: >
+      Buffer overflow via deviceList parameter. strcpy of oversized
+      device list string into fixed buffer.
+    cvss_score: 8.8
+
+  # -- CVE-2018-18728: RCE via usbName field ---
+  - cve_id: CVE-2018-18728
+    cwe: CWE-78
+    function_name: formSetUsbUnload
+    binary_path: bin/httpd
+    description: >
+      Remote code execution via usbName field containing shell metacharacters.
+      Passed unsanitized to system() call.
+    cvss_score: 9.8
+
+  # -- CVE-2018-18709: Stack overflow in firewallEn param ---
+  - cve_id: CVE-2018-18709
+    cwe: CWE-121
+    function_name: formSetFirewall
+    binary_path: bin/httpd
+    description: >
+      Stack buffer overflow via firewallEn parameter.
+      strcpy of user-controlled value into fixed stack buffer.
+    cvss_score: 8.8
+
+  # -- CVE-2025-22949: Command injection in SetSambaCfg ---
+  - cve_id: CVE-2025-22949
+    cwe: CWE-78
+    function_name: formSetSambaCfg
+    binary_path: bin/httpd
+    description: >
+      Command injection via usb.samba.guest.user parameter in
+      /goform/SetSambaCfg. The guest username value is passed to
+      system() without sanitization.
+    cvss_score: 9.8
+
+  # -- CVE-2025-22946: Stack overflow in SetOnlineDevName ---
+  - cve_id: CVE-2025-22946
+    cwe: CWE-121
+    function_name: formSetOnlineDevName
+    binary_path: bin/httpd
+    description: >
+      Stack buffer overflow via device name parameter in
+      /goform/SetOnlineDevName. Long device name overflows
+      fixed-size stack buffer via strcpy.
+    cvss_score: 9.8
+
+# ---- Metadata -------------------------------------------------------------
+metadata:
+  source_url: "https://www.tenda.com.cn/download/detail-1110.html"
+  notes: >
+    Tenda AC9 v15.03.05.19 firmware. ARM 32-bit.
+    httpd is the main HTTP daemon with goform CGI handlers.
+    Binaries are likely stripped (no debug symbols).
+    u-boot uImage with LZMA kernel + squashfs rootfs.

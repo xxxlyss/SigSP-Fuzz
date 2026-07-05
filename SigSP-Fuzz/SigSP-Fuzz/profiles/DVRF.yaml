@@ -1,0 +1,226 @@
+# =============================================================================
+# DVRF (Damn Vulnerable Router Firmware) v0.3 — Firmware Profile
+# =============================================================================
+#
+# DVRF is an open-source deliberately vulnerable MIPS router firmware by
+# Praetorian.  This build contains 6 vulnerable binaries + real-world daemons
+# (httpd, dnsmasq, telnetd) on a squashfs root filesystem.
+#
+# NOTE: pivate_bof and upnpd are NOT present in this v0.3 build.
+#       socket_cmdi is named socket_cmd in the extracted filesystem.
+#       stack_bof_02 is under ShellCode_Required/ not Intro/.
+#
+# This profile is used for:
+#   1. Ground truth validation — cross-reference discovered SPs against known CVEs
+#   2. Architecture override — skip auto-detection when binutils misbehaves
+#   3. Entry point enrichment — help Phase 2 identify attack surfaces faster
+#
+# Usage:
+#   ./FuzzingBrain.sh --firmware firmware/DVRF_v03.bin --profile profiles/DVRF.yaml
+# =============================================================================
+
+name: DVRF
+version: "0.3"
+vendor: Praetorian
+device_type: router
+
+# ---- Hardware Architecture ------------------------------------------------
+# MIPS 32-bit little-endian with uClibc static linking.
+# jalr t9 patterns indicate GOT-based indirect calls (typical MIPS).
+architecture:
+  cpu: mips
+  endian: little
+  bits: 32
+
+# ---- Filesystem -----------------------------------------------------------
+filesystem: squashfs
+
+# ---- Known Entry Points ---------------------------------------------------
+
+known_entry_points:
+  - name: Mini HTTP Daemon
+    binary: usr/sbin/httpd
+    protocol: HTTP
+    port: 80
+    description: >
+      Lightweight web server (~1 MB, uClibc static). 1013/1023 functions
+      flagged unsafe by ObjdumpAnalyzer from imported dangerous symbols.
+
+  - name: DNS Forwarder
+    binary: usr/sbin/dnsmasq
+    protocol: DNS
+    port: 53
+    description: >
+      DNS/DHCP forwarder (~44 KB). 101/106 functions flagged unsafe.
+
+  - name: Telnet Daemon
+    binary: usr/sbin/telnetd
+    protocol: TELNET
+    port: 23
+    description: >
+      Telnet server. Historically vulnerable to command injection and auth bypass.
+
+  - name: Stack Buffer Overflow 01
+    binary: pwnable/Intro/stack_bof_01
+    protocol: stdin
+    port: 0
+    description: >
+      CLI binary. main() calls strcpy + system on user argument.
+      Classic stack buffer overflow → ret2libc.
+
+  - name: Stack Buffer Overflow 02
+    binary: pwnable/ShellCode_Required/stack_bof_02
+    protocol: stdin
+    port: 0
+    description: >
+      CLI binary. strcpy without bounds check. Requires shellcode.
+      Building block for ROP/shellcode exploitation.
+
+  - name: Socket Buffer Overflow
+    binary: pwnable/ShellCode_Required/socket_bof
+    protocol: TCP
+    port: 8888
+    description: >
+      Network-accessible daemon. recv() into fixed stack buffer.
+      Remote unauthenticated RCE via oversized packet.
+
+  - name: Socket Command Injection
+    binary: pwnable/ShellCode_Required/socket_cmd
+    protocol: TCP
+    port: 9999
+    description: >
+      Network-accessible daemon. popen() on unsanitized user input.
+      Remote unauthenticated command injection (CWE-78).
+
+  - name: Use-After-Free
+    binary: pwnable/Intro/uaf_01
+    protocol: stdin
+    port: 0
+    description: >
+      CLI binary. malloc → free → use pattern (dangling pointer).
+      Heap corruption leading to arbitrary write.
+
+  - name: Heap Overflow
+    binary: pwnable/Intro/heap_overflow_01
+    protocol: stdin
+    port: 0
+    description: >
+      CLI binary. Heap-based buffer overflow (CWE-122).
+      malloc'd buffer overflowed via strcpy/strcat.
+
+# ---- Known CVEs (Ground Truth) --------------------------------------------
+# These are the deliberately planted vulnerabilities.
+# After pipeline completion, cross-reference discovered SPs against this
+# list to compute detection rate (recall).
+
+known_cves:
+  # -- stack_bof_01 --
+  - cve_id: DVRF-STACK-BOF-01
+    cwe: CWE-121
+    function_name: main
+    binary_path: pwnable/Intro/stack_bof_01
+    description: >
+      Stack buffer overflow via strcpy on command-line argument.
+      main() copies argv[1] into a 200-byte stack buffer via strcpy,
+      then calls system() with user-controlled data.
+      Classic ret2libc: overflow return address → system() with shell command.
+    cvss_score: 8.5
+
+  # -- stack_bof_02 --
+  - cve_id: DVRF-STACK-BOF-02
+    cwe: CWE-121
+    function_name: main
+    binary_path: pwnable/ShellCode_Required/stack_bof_02
+    description: >
+      Stack buffer overflow via strcpy without bounds check.
+      Requires shellcode execution (NX may be disabled in QEMU user-mode).
+      Overflow occurs in main() on argv[1].
+    cvss_score: 8.0
+
+  # -- socket_bof --
+  - cve_id: DVRF-SOCKET-BOF-01
+    cwe: CWE-121
+    function_name: main
+    binary_path: pwnable/ShellCode_Required/socket_bof
+    description: >
+      Network-accessible stack buffer overflow via recv().
+      Daemon listens on TCP port 8888, recv()'s data into a fixed
+      500-byte stack buffer. No size check before copy.
+      Remote RCE via crafted oversized packet.
+    cvss_score: 9.8
+
+  # -- socket_cmd --
+  - cve_id: DVRF-SOCKET-CMDI-01
+    cwe: CWE-78
+    function_name: main
+    binary_path: pwnable/ShellCode_Required/socket_cmd
+    description: >
+      OS command injection via popen() on unsanitized network input.
+      Daemon listens on TCP port 9999, passes recv()'d data directly
+      to popen(). No input sanitization. Full remote shell.
+    cvss_score: 9.8
+
+  # -- uaf_01 --
+  - cve_id: DVRF-UAF-01
+    cwe: CWE-416
+    function_name: main
+    binary_path: pwnable/Intro/uaf_01
+    description: >
+      Use-after-free via dangling pointer. malloc() allocates,
+      free() deallocates, then the freed pointer is reused (use-after-free).
+      Heap metadata corruption, potentially leading to arbitrary write.
+    cvss_score: 8.2
+
+  # -- heap_overflow_01 --
+  - cve_id: DVRF-HEAP-OF-01
+    cwe: CWE-122
+    function_name: main
+    binary_path: pwnable/Intro/heap_overflow_01
+    description: >
+      Heap-based buffer overflow. malloc() allocates a buffer,
+      then strcpy/strcat/gets overflow it via user input.
+      Heap metadata corruption or adjacent chunk overwrite.
+    cvss_score: 7.8
+
+  # -- httpd --
+  - cve_id: DVRF-HTTPD-001
+    cwe: CWE-121
+    function_name: httpd_handler
+    binary_path: usr/sbin/httpd
+    description: >
+      Stack buffer overflow in HTTP request handler. Likely triggered
+      via oversized URL/CGI parameter passed through unchecked strcpy.
+      httpd imports strcpy, sprintf, system, popen from uClibc.
+    cvss_score: 9.0
+
+  - cve_id: DVRF-HTTPD-002
+    cwe: CWE-78
+    function_name: cgi_execute
+    binary_path: usr/sbin/httpd
+    description: >
+      Command injection via unsanitized CGI parameter passed to
+      system() or popen(). Common in embedded HTTP daemons.
+    cvss_score: 9.0
+
+# ---- Tuning (Phase 3 scope control) --------------------------------------
+# Only analyze these binaries to stay within API rate limits.
+focus_binaries:
+  - pwnable/Intro/stack_bof_01
+  - pwnable/ShellCode_Required/stack_bof_02
+  - pwnable/ShellCode_Required/socket_bof
+  - pwnable/ShellCode_Required/socket_cmd
+  - pwnable/Intro/uaf_01
+  - pwnable/Intro/heap_overflow_01
+  - usr/sbin/httpd
+  - usr/sbin/dnsmasq
+
+# ---- Metadata -------------------------------------------------------------
+metadata:
+  source_url: "https://github.com/praetorian-inc/DVRF"
+  default_credentials: "admin:admin"
+  notes: >
+    DVRF v0.3 extracted: 391 files, 360 ELF binaries (MIPS32 LE).
+    6 pwnable binaries confirmed in extracted squashfs-root.
+    pivate_bof and upnpd NOT included in this build.
+    All binaries statically linked with uClibc.
+    ObjdumpAnalyzer uses mipsel-linux-gnu-objdump cross-tools.

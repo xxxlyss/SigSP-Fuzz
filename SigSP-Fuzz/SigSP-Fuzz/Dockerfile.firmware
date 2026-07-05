@@ -1,0 +1,98 @@
+# FuzzingBrain Firmware Analysis — Full Stack Docker Image
+# Includes: Ghidra, QEMU (user + system), AFL++, binwalk, cross-binutils
+#
+# Build:
+#   docker build -f Dockerfile.firmware -t fuzzingbrain-firmware .
+#
+# Run:
+#   docker run --rm -it -v $(pwd)/firmware:/firmware -v $(pwd)/results:/results \
+#     fuzzingbrain-firmware analyze-firmware --firmware /firmware/router.bin --arch mips
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+
+# =============================================================================
+# System Dependencies
+# =============================================================================
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build tools
+    build-essential git curl wget ca-certificates gnupg \
+    python3 python3-pip python3-dev \
+    # QEMU (user-mode + system-mode)
+    qemu-user-static qemu-system-mips qemu-system-arm \
+    qemu-system-x86 qemu-system-misc \
+    # Cross-binutils
+    binutils-mipsel-linux-gnu binutils-mips-linux-gnu \
+    binutils-arm-linux-gnueabihf binutils-aarch64-linux-gnu \
+    # Firmware extraction
+    binwalk python3-binwalk \
+    # Utilities
+    unzip file xxd strace netcat-openbsd \
+    # Java (for Ghidra)
+    openjdk-17-jdk-headless \
+    # Clean up
+    && rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
+# Python Dependencies
+# =============================================================================
+
+COPY requirements.txt /app/requirements.txt
+RUN pip3 install --no-cache-dir -r /app/requirements.txt
+
+# =============================================================================
+# Ghidra Installation
+# =============================================================================
+
+ARG GHIDRA_VERSION=11.3.1
+ARG GHIDRA_RELEASE=20250205
+
+RUN mkdir -p /opt && \
+    cd /opt && \
+    wget -q "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/Ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_RELEASE}.zip" \
+         -O ghidra.zip && \
+    unzip -q ghidra.zip && \
+    rm ghidra.zip && \
+    mv ghidra_${GHIDRA_VERSION}_PUBLIC ghidra
+
+ENV GHIDRA_HOME=/opt/ghidra
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+# =============================================================================
+# AFL++ Installation
+# =============================================================================
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    afl++ afl++-clang afl++-doc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build AFL++ QEMU mode support
+RUN cd /tmp && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    libpixman-1-dev libglib2.0-dev && \
+    rm -rf /var/lib/apt/lists/*
+    # Note: Full AFL++ QEMU mode compilation requires additional build steps.
+    # The apt-installed afl++ has basic QEMU mode support.
+
+# =============================================================================
+# Application
+# =============================================================================
+
+WORKDIR /app
+COPY fuzzingbrain/ /app/fuzzingbrain/
+
+# Create directories
+RUN mkdir -p /firmware /results /tmp/qemu_snapshots /tmp/qemu_monitors
+
+# =============================================================================
+# Entrypoint
+# =============================================================================
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+ENTRYPOINT ["python3", "-m", "fuzzingbrain.cli"]
+CMD ["--help"]
